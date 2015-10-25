@@ -1,0 +1,234 @@
+---
+title: "PracticalMachineLearningProject"
+author: "Tetyana Holets"
+date: "October 25, 2015"
+output: html_document
+---
+
+### Load packages
+
+```{r}
+library(caret)
+library(randomForest)
+library(rpart)
+library(rattle)
+library(rpart.plot)
+```
+
+### Reading the data
+
+```{r}
+setwd("D:/Data_Science/Coursera/Practical_Machine_Learning/Practical_Machine_Learning")
+```
+
+We observe empty cells, "#DIV/0!", and NAs in the given datasets
+Therefore, I read the data encoding values like "NA", "", and "#DIV/0!" as NAs
+
+```{r}
+training <- read.csv("pml-training.csv", stringsAsFactors = FALSE,
+                     na.strings = c("NA", "", "#DIV/0!"))
+testing <- read.csv("pml-testing.csv", stringsAsFactors = FALSE, 
+                    na.strings = c("NA", "", "#DIV/0!"))
+```
+
+### Data cleaning
+
+I will apply the same transformations to trainng and testing datasets
+
+Remove variables which include more than 95% of NAs
+
+```{r}
+whichNA <- sapply(training, is.na)
+sumNA <- colSums(whichNA)
+percentNA <- sumNA/(dim(training)[1])
+removeNA <- percentNA>0.95
+training.small <- training[,!removeNA]
+```
+
+100 variables, which include more than 95% of NAs, were removed.
+Apply the same transformation to testing dataset
+
+```{r}
+testing.small <- testing[,!removeNA]
+```
+
+X variable stands for ID (it is just a sequence from 1 to 19622).
+It does not bring extra valuable information for classification. 
+Therefore, I remove it.
+Similarly, user_name variable consists of the names of the participants and 
+it should not bring extra information for classification as well. 
+I remove it as well.
+Variable cvtd_timestamp does not change within a participant name.
+Therefore, I drop it as well
+
+```{r}
+dropVARs <- c("X", "user_name", "cvtd_timestamp")
+
+training.small <- training.small[ , -which(names(training.small) %in% dropVARs)]
+testing.small <- testing.small[ , -which(names(testing.small) %in% dropVARs)]
+```
+
+Since train function in caret package only accepts numeric values 
+(i.e., no factors or character variables),
+I encode character variables included into datasets
+
+Encode character variable new_window so that "yes"=2 and "no"=1
+
+```{r}
+training.small$new_window <- as.numeric(as.factor(training.small$new_window))
+testing.small$new_window <- as.numeric(as.factor(testing.small$new_window))
+```
+
+Changing class of outcome variable to Factor
+
+```{r}
+training.small$classe <- factor(as.character(training.small$classe))
+```
+
+Turning all integer variables to numeric
+
+```{r}
+features.names <- names(training.small)[1:ncol(training.small)-1]
+
+for (f in features.names) {
+  training.small[[f]] <- as.numeric(training.small[[f]])
+}
+
+for (f in features.names) {
+  testing.small[[f]] <- as.numeric(testing.small[[f]])
+}
+```
+
+Analyze zero- and near-zero-variance variables
+
+```{r}
+nzvNames <- nearZeroVar(training.small, saveMetrics = TRUE)
+nzvNames
+```
+
+Analysis of zero- and neazero-variance variables shows that
+there are no zero-variance variables left in the training.small dataset.
+There is one near-zero-variance variable new_window, but I decide to keep it,
+since it may include useful information for classification.
+
+The cleaned data sets training.small and testing.small both have 57 columns 
+with the same first 56 variables 
+and the last variable classe and problem_id individually. 
+training.small has 19622 rows while testing.small has 20 rows.
+
+### Data spliting
+
+To get out-of-sample errors, I split the cleaned training set training.small
+into a training set (training.train, 70%) for builind a model 
+and a validation set (training.val, 30%) to compute the out-of-sample errors.
+
+```{r}
+set.seed(5885) 
+inTrain <- createDataPartition(training.small$classe, p = 0.7, list = FALSE)
+training.train <- training.small[inTrain, ]
+training.val <- training.small[-inTrain, ]
+```
+
+### Prediction Algorithms
+
+Use classification trees and random forests to predict the outcome.
+
+#### Classification Tree
+
+Perform 5-fold cross-validation when training the model. 
+
+```{r}
+control <- trainControl(method="cv", number=5)
+mod_rpart <- train(classe ~ ., data = training.train, method = "rpart", 
+                   trControl = control)
+print(mod_rpart, digits = 4)
+fancyRpartPlot(mod_rpart$finalModel)
+```
+
+Predict outcomes using validation set
+
+```{r}
+pred_rpart <- predict(mod_rpart, training.val)
+```
+
+Show prediction result
+
+```{r}
+confusionMatrix <- confusionMatrix(pred_rpart, training.val$classe)
+confusionMatrix$overall[1]
+```
+
+From the confusion matrix, the accuracy rate is approximately 0.49, 
+and so the out-of-sample error rate is appriximately 0.51. 
+Using Classification Tree does not predict the outcome classe very well.
+
+#### Random forests
+
+Try Random forest method instead.
+Perform 5-fold cross-validation when training the model.
+
+```{r}
+mod_rf <- train(classe ~ ., method = "rf", data = training.train, 
+                importance = T, trControl = trainControl(method = "cv", number = 5))
+print(mod_rf, digits = 4)
+```
+
+Predict outcomes using validation set
+
+```{r}
+pred_rf <- predict(mod_rf, training.val)
+```
+
+Show prediction result
+
+```{r}
+confusionMatrix <- confusionMatrix(pred_rf, training.val$classe)
+confusionMatrix$overall[1]
+```
+
+Random forest method is much better than Classification Tree method. 
+The accuracy rate is 0.9994, and so the out-of-sample error rate is 0.0006. 
+This may be due to the fact that many predictors are highly correlated. 
+Random forests chooses a subset of predictors at each split and decorrelate the trees. 
+
+Based on out-of-sample error, which we obtained applying Random forest model 
+to validation (training.val) dataset, we can expect to get similar error 
+(approximately 0.06%) when applying classification model to testing dataset (testing.small).
+
+### Prediction on Testing Set
+
+We now use Random forest to predict the outcome variable classe for the testing set.
+
+Dropping problem_id variable
+
+```{r}
+testing.small$problem_id <- NULL
+```
+
+Predict the outcome variable classe for the testing set (testing.small)
+
+```{r}
+prediction <- as.character(predict(mod_rf, testing.small))
+prediction
+```
+
+Code from Prediction Assignment Submission: Instructions
+
+```{r evlal = FALSE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("./problem_id_", i, ".txt")
+    write.table(x[i], file = filename, quote = FALSE, row.names = FALSE, col.names = FALSE)
+  }
+}
+pml_write_files(prediction)
+```
+
+### Conclusion
+
+Based on obtained results, it is possible to conclude that Random forest classification
+technique works much better than Classification Tree.
+Based on the results of Submission part of the project, it is possible to say that
+Random forest classification technique resulted in accurate prediction on
+test dataset (testing.small) as well. All predictions were correct.
